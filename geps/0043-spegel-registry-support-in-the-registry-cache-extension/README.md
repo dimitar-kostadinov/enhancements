@@ -80,7 +80,7 @@ Providing a peer-to-peer (p2p) image caching solution that is enabled by default
   ```toml
   server = "https://registry-1.docker.io"
 
-  [host."http://localhost:15500"]
+  [host."http://<node-internal-ip>:15500"]
     capabilities = ["pull", "resolve"]
 
   [host."https://<docker-registry-service-ip>:5000"]
@@ -109,7 +109,7 @@ A brief overview of the components used in this proposal.
 The content discovery in a Kubernetes cluster is based on [Kademlia DHT][content-provider-routing]. When an image content (blob, manifest or index) is available in the containerd image store, Spegel adds its `digest` to the DHT provider store, announcing that the node provides the content corresponding to the `digest`. Then, when the same `digest` is needed by another node, Spegel searches the DHT for peers that provide the content and pulls it from them.
 
 The straightforward way to deploy Spegel to a Kubernetes cluster is by using the provided helm chart. However, this has some [drawbacks](https://spegel.dev/docs/faq/#what-should-i-do-if-other-pods-are-scheduled-on-new-nodes-before-spegel) when a new node joins the cluster.
-Our goal is to be able to use Spegel for all images pulled from the kubelet, including the `registry.k8s.io/pause` image. Therefore we will [run][run-spegel-on-host] Spegel registry as a systemd unit service on the host. This requires contributing a new Spegel `bootstrapper` or extending the existing [HTTP bootstrapper](https://github.com/spegel-org/spegel/blob/6f02215fa3fc1d3bbdb11fa62dfa7c07dbe3b7c2/pkg/routing/bootstrap.go#L131-L135). The [`bootstrapper`](https://github.com/spegel-org/spegel/blob/e0b9c087b1996efff4401dc7cd1cd81eb58fa518/pkg/routing/bootstrap.go#L24) provides a list of bootstrap nodes addresses so that Spegel can joins the p2p cluster, and there is currently no suitable `bootstrapper` if we want to run Spegel on the host as a systemd unit.
+Our goal is to be able to use Spegel for all images pulled from the kubelet, including the `registry.k8s.io/pause` image. Therefore we will [run][run-spegel-on-host] Spegel registry as a systemd unit service on the host. The existing [HTTP bootstrapper](https://github.com/spegel-org/spegel/blob/99898409898e15894832a9f236d33903318c292c/pkg/routing/bootstrap.go#L136-L140) will be used with configured mTLS authentication with Spegel `bootstrapper` server.
 
 #### Kademlia Distributed Hash Table Overview
 
@@ -196,10 +196,26 @@ Restart=always
 RestartSec=5
 MemoryHigh=80M
 MemoryMax=100M
-ExecStart=/opt/bin/spegel registry <params-list>
+ExecStartPre=/bin/sh -c 'sed -i "s/<<HOST_IP>>/$(hostname -i)/g" /var/lib/spegel/env'
+ExecStartPre=/bin/sh -c 'find /etc/containerd/certs.d -type f -name "*.toml" | xargs sed -i "s/<<HOST_IP>>/$(hostname -i)/g"'
+EnvironmentFile=/var/lib/spegel/env
+ExecStart=/opt/bin/spegel \
+    registry \
+    --log-level=INFO \
+    --mirror-resolve-retries=3 \
+    --mirror-resolve-timeout=20ms \
+    --registry-addr=${HOST_IP}:15500 \
+    --router-addr=${HOST_IP}:15501 \
+    --metrics-addr=${HOST_IP}:19090 \
+    --containerd-sock=/run/containerd/containerd.sock \
+    --containerd-namespace=k8s.io \
+    --bootstrap-kind=http \
+    --http-bootstrap-url=https://<spegel_bootstrapper_domain_name>/bootstrap-nodes \
+    --http-bootstrap-cert-dir=/var/lib/spegel/certs \
+    --containerd-content-path=/var/lib/containerd/io.containerd.content.v1.content
 ```
 
-Certificates used for `mTLS` with the `Bootstrapper` are also provided via the `OperatingSystemConfig` resource.
+The certificates used for `mTLS` with `Bootstrapper` are also provided in the `/var/lib/spegel/certs` folder via the `OperatingSystemConfig` resource.
 
 ### Containerd Configuration
 
@@ -227,7 +243,8 @@ $ tree /etc/containerd/certs.d
     └── hosts.toml
 
 $ cat /etc/containerd/certs.d/_default/hosts.toml
-[host."http://localhost:15500"]
+# managed by gardener-node-agent
+[host."http://<node-internal-ip>:15500"]
   capabilities = ["pull", "resolve"]
 ```
 
@@ -238,9 +255,9 @@ For existing mirror configurations (e.g., provided by `registry-cache` and `imag
 In the Shoot control plane a Spegel `bootstrapper` is provided. It consists of:
 - Deployment
 - Service
-- Ingress
+- Istio VirtualService and Gateway
 
-The `spegel` registries send a GET request to `https://<ingress-host>/bootstrap-nodes` to get the bootstrap peers. Traffic is encrypted using mTLS.
+The `spegel` registries send a GET request to `https://<spegel_bootstrapper_domain_name>/bootstrap-nodes` to get the bootstrap peers. Traffic is encrypted using mTLS.
 The `bootstrapper` uses client-go to access the `kube-apiserver` and lists the Kubernetes nodes. It sorts the nodes and returns a subset of the first few node `net.IPAddr` addresses, similar to what is done in [`DNSBootstrapper`](https://github.com/spegel-org/spegel/blob/v0.6.0/pkg/routing/bootstrap.go#L77-L80).
 
 ### Observability and Monitoring
@@ -252,25 +269,22 @@ The `spegel` registry exposes the following noticeable metrics:
 - `spegel_resolve_duration_seconds` - The duration for router to resolve a peer - histogram type.
 - `spegel_advertised_keys` - Number of keys advertised to be available - gauge type.
 
-With these metrics, Spegel cache's efficiency can be tracked.
+With these metrics, Spegel cache's efficiency can be tracked. In the PoC branch, a [sample dashboard](https://github.com/dimitar-kostadinov/gardener-extension-registry-cache/blob/spegel_api_poc/pkg/component/registrycaches/monitoring/dashboard.json) is created.
 
 ### Future Enhancement
 
 In the [Network topology awareness][network-topology-awareness] issue there are options to implement zone aware routing (e.g., enhance Kademlia DHT with Soft Partitioning).
 
-A simple approach was tested locally on GCP infrastructure. When the content is available on the node, it registers `<digest>` and `<zone><digest>` as keys in the DHT. The disadvantage of this approach, besides duplication of keys, is that when searching for content, the `<zone><digest>` key is tried first, and if nothing is found, a new search is performed for the `<digest>` key.
+A simple approach was tested locally on GCP infrastructure. When the content is available on the node, it registers `<digest>` and `<zone><digest>` as keys in the DHT. The disadvantage of this approach, besides duplication of keys, is that when searching for content, the `<zone><digest>` key is tried first, and if not enough peers providing the content are found, a new search is performed for the `<digest>` key.
 
 ### Proof of Concept
 
 There is **PoC** of the above proposal available here:
 - https://github.com/dimitar-kostadinov/gardener-extension-registry-cache/tree/spegel_api_poc
-- https://github.com/dimitar-kostadinov/spegel/tree/poc
 
 ## Impact and Alternatives
 
 ### Risks, Downsides and Trade-offs
-
-The external `Bootstrapper` should be contributed to Spegel.
 
 ### Alternative approaches
 
@@ -286,9 +300,8 @@ We are seeking approval from the Technical Steering Committee to validate and ap
 
 ### Next steps
 
-1. Contribute external `Bootstrapper` to Spegel.
-2. Productization of the PoC.
-3. Explore and contribute options for topology-aware routing (Future Enhancement).
+1. Productization of the PoC.
+2. Explore and contribute options for topology-aware routing (Future Enhancement).
 
 ## Appendix (Optional)
 
