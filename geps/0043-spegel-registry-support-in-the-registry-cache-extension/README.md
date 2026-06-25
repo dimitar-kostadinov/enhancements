@@ -1,36 +1,5 @@
 # GEP-0043: Spegel Registry Support in the registry-cache extension
 
-## Table of Contents
-
-- [Summary](#summary)
-- [Motivation](#motivation)
-    - [The Problem](#the-problem)
-    - [Why Should We Care](#why-should-we-care)
-    - [Who Benefits](#who-benefits)
-    - [Goals](#goals)
-    - [Non-Goals](#non-goals)
-- [Proposal](#proposal)
-    - [Introduction](#introduction)
-        - [Spegel Overview](#spegel-overview)
-        - [Kademlia Distributed Hash Table Overview](#kademlia-distributed-hash-table-overview)
-    - [Registry Spegel API Design](#registry-spegel-api-design)
-    - [Architecture Overview](#architecture-overview)
-    - [Spegel Binary and Systemd Unit](#spegel-binary-and-systemd-unit)
-    - [Containerd Configuration](#containerd-configuration)
-    - [Spegel Bootstrapper](#spegel-bootstrapper)
-    - [Observability and Monitoring](#observability-and-monitoring)
-    - [Future Enhancement](#future-enhancement)
-    - [Proof of Concept](#proof-of-concept)
-- [Impact and Alternatives](#impact-and-alternatives)
-    - [Risks, Downsides and Trade-offs](#risks-downsides-and-trade-offs)
-    - [Alternative approaches](#alternative-approaches)
-- [Decision Request](#decision-request)
-    - [Next steps](#next-steps)
-- [Appendix Optional](#appendix-optional)
-    - [Kademlia Distributed Hash Table](#kademlia-distributed-hash-table)
-    - [Supporting Materials Linked or Embedded](#supporting-materials-linked-or-embedded)
-    - [References to Related Issues](#references-to-related-issues)
-
 ## Summary
 
 This proposal introduces a new extension type `registry-spegel` to the [gardener-extension-registry-cache](https://github.com/gardener/gardener-extension-registry-cache) extension. When enabled in the Shoot specification, it will install [Spegel][spegel] local registry mirror on the Shoot cluster nodes.
