@@ -255,22 +255,34 @@ There is **PoC** of the above proposal available here:
 
 ### Risks, Downsides and Trade-offs
 
+- **Images not covered by Spegel**: Images pulled by the `gardener-node-init.service` via the `ctr` CLI / containerd client (e.g. `gardener-node-agent`, `hyperkube`, `opentelemetry-collector`/`valitail`, `spegel` itself, and images referenced via `spec.files[].content.imageRef` in the `OperatingSystemConfig`) are pulled before Spegel is available and therefore always come from the upstream. See [Non-Goals](#non-goals).
+
+- **Increased root disk usage**: To be able to serve image layers to peers, Spegel requires containerd's [`discard_unpacked_layers`](https://spegel.dev/docs/getting-started/#compatibility) setting to be `false`. On systems where this setting defaults to `true`, enabling `registry-spegel` will retain the compressed layer blobs on the node's root disk after unpacking, thus increasing the root disk usage. Spegel serves directly from containerd's content store - but it does prevent the space reclamation that `discard_unpacked_layers = true` would otherwise perform. On Garden Linux this setting is already `false` by default, so there is no change. This trade-off should be clearly documented for users so it does not come as a surprise.
+
+- **Increased memory usage on the nodes**: Running Spegel as a systemd unit on every node adds a resident process that consumes memory (for the libp2p host, the Kademlia DHT routing table, and the advertised content records). The `spegel.service` unit constrains this via `MemoryHigh=80M` and `MemoryMax=100M`, so a node's available memory is reduced accordingly. As this memory is consumed on the host and not by a Kubernetes pod, it is not reflected in the node's kube-reserved/system-reserved and is therefore not visible as a scheduling reservation.
+
 ### Alternative approaches
+
+#### Spegel as a DaemonSet
+
+The straightforward way to deploy Spegel is to use upstream Helm chart and deploy it as a `DaemonSet`. This variant was implemented and tested as a PoC using the upstream DNS bootstrapper ([PoC](https://github.com/dimitar-kostadinov/gardener-extension-registry-cache/tree/spegel_api_poc2)), which works out of the box.
+
+Pros:
+- Improved visibility in Kubernetes: native monitoring, debugging (`kubectl logs`), autoscaling and resource reservation.
+
+Cons:
+- Does not cover most images in the `kube-system` namespace, because the Spegel pod (and, for the DNS bootstrapper, `kube-dns`) must be running before it can serve content. Images pulled during node bootstrap - measured at roughly `200MiB` per node are pulled from the upstream instead of from a peer.
+- Like the systemd approach, it does not cover images pulled by the `gardener-node-agent`.
+
+The systemd-unit approach was preferred because it covers **all** images pulled by the kubelet, including images from the `kube-system` namespace, which is where a significant share of the traffic savings comes from. The visibility trade-off is mitigated via metrics scraping.
+
+#### Dragonfly
 
 [`Dragonfly`][dragonfly] was evaluated as an alternative. Unlike Spegel, it is not stateless and requires central components such as:
 - manager - to manage the p2p network.
 - scheduler - for optimal parent peer selection.
 
 They require `mysql` and `redis` storages. Another disadvantage is the additional image store on the node's root disk.
-
-## Decision Request
-
-We are seeking approval from the Technical Steering Committee to validate and approve the architectural approach in this proposal.
-
-### Next steps
-
-1. Productization of the PoC.
-2. Explore and contribute options for topology-aware routing (Future Enhancement).
 
 ## Appendix (Optional)
 
