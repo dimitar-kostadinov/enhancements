@@ -34,7 +34,7 @@ Providing a peer-to-peer (p2p) image caching solution that is enabled by default
 ### Who Benefits
 
 - **End users** benefit from the reduced latency when pulling images.
-- **Stakeholders** see reduced costs for NAT Gateways and registries.
+- **Stakeholders** see reduced costs for egress network and registries.
 - **Gardener operators** are no longer engaged in monitoring notifications of PV sizes in the registry caches.
 
 ### Goals
