@@ -25,7 +25,7 @@ The registry cache extension is not widely adopted in some Gardener landscapes, 
 
 ### Why Should We Care
 
-Because the `registry-cache` cannot be enabled globally and not all upstream registries are covered, downloading images results in significant NAT Gateway traffic costs.
+Because the `registry-cache` cannot be enabled globally and not all upstream registries are covered, downloading images results in significant egress network traffic costs.
 Additionally, there are costs for outbound traffic from image registries like `Amazon Elastic Container Registry`, `Google Cloud Artifact Registry`, and `Azure Container Registry`.
 Even if the pull-through cache is configured, there are also costs for cross zonal traffic within the Shoot cluster.
 
@@ -226,7 +226,7 @@ In the Shoot control plane a Spegel `bootstrapper` is provided. It consists of:
 - Service
 - Istio VirtualService and Gateway
 
-The `spegel` registries send a GET request to `https://<spegel_bootstrapper_domain_name>/bootstrap-nodes` to get the bootstrap peers. Traffic is encrypted using mTLS.
+The `spegel` registries send a GET request to `https://<spegel_bootstrapper_domain_name>/bootstrap-nodes` to get the bootstrap peers. Traffic is encrypted and authenticated using mTLS.
 The `bootstrapper` uses client-go to access the `kube-apiserver` and lists the Kubernetes nodes. It sorts the nodes and returns a subset of the first few node `net.IPAddr` addresses, similar to what is done in [`DNSBootstrapper`](https://github.com/spegel-org/spegel/blob/v0.6.0/pkg/routing/bootstrap.go#L77-L80).
 
 ### Observability and Monitoring
@@ -274,7 +274,7 @@ Cons:
 - Does not cover most images in the `kube-system` namespace, because the Spegel pod (and, for the DNS bootstrapper, `kube-dns`) must be running before it can serve content. Images pulled during node bootstrap - measured at roughly `200MiB` per node are pulled from the upstream instead of from a peer.
 - Like the systemd approach, it does not cover images pulled by the `gardener-node-agent`.
 
-The systemd-unit approach was preferred because it covers **all** images pulled by the kubelet, including images from the `kube-system` namespace, which is where a significant share of the traffic savings comes from. The visibility trade-off is mitigated via metrics scraping.
+The systemd-unit approach was preferred because it covers **all** images pulled by the kubelet, including images from the `kube-system` namespace, which is where a significant share of the traffic savings comes from. The visibility trade-off is mitigated by the Gardener observability stack (metrics scraping and journald log collection via the OpenTelemetry Collector).
 
 #### Dragonfly
 
